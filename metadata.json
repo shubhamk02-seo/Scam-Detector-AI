@@ -1,0 +1,6 @@
+{
+  "name": "SCAMCHECK AI",
+  "description": "Before you trust it, check it. Analyze suspicious messages, screenshots, and links to uncover red flags and protect yourself from fraud.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
