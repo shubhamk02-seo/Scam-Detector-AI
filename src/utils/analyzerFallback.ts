@@ -1,50 +1,24 @@
-import { GoogleGenAI, Type } from '@google/genai';
+import { ScamAnalysisResult } from '../types';
 
-interface AnalysisRequestPayload {
-  type?: 'text' | 'url' | 'screenshot';
-  text?: string;
-  imageBase64?: string;
-  mimeType?: string;
-  language?: string;
-}
-
-interface RedFlagItem {
-  title: string;
-  explanation: string;
-  severity: 'HIGH' | 'MEDIUM' | 'LOW';
-  quote?: string;
-}
-
-interface AnalysisResponseData {
-  risk_score: number;
-  risk_level: 'LOW_RISK' | 'CAUTION' | 'SUSPICIOUS' | 'HIGH_RISK';
-  risk_label: string;
-  category: string;
-  category_name: string;
-  summary: string;
-  red_flags: RedFlagItem[];
-  likely_goal: string;
-  recommended_actions: string[];
-  things_to_avoid: string[];
-  verification_steps: string[];
-  simple_explanation: string;
-  hindi_summary?: string;
-  hinglish_summary?: string;
-  limitations: string;
-}
-
-function analyzeFallbackLocal(
+export function analyzeFallback(
   content: string,
-  _type: 'text' | 'url' | 'screenshot' = 'text',
+  type: 'text' | 'url' | 'screenshot' = 'text',
   _language: string = 'en'
-): AnalysisResponseData {
+): ScamAnalysisResult {
   const text = (content || '').toLowerCase();
-  const redFlags: RedFlagItem[] = [];
+  const redFlags: Array<{
+    title: string;
+    explanation: string;
+    severity: 'HIGH' | 'MEDIUM' | 'LOW';
+    quote?: string;
+  }> = [];
+
   let score = 15;
   let category = 'GENERAL_COMMUNICATION';
   let categoryName = 'General Communication';
   let likelyGoal = 'General communication or informational update.';
 
+  // Heuristic pattern checks
   const hasUpfrontFee =
     text.includes('fee') ||
     text.includes('charge') ||
@@ -280,230 +254,6 @@ function analyzeFallbackLocal(
         ? 'Yeh message clearly ek scam lag raha hai. Sender aapko rush ya lalach dekar paise ya OTP maangne ki koshish kar raha hai. Koi payment mat kijiye.'
         : 'Iss message mein filhal koi bada fraud signal nahi mila, par bina verify kiye kisi ko bhi paise ya OTP mat bhejna.',
     limitations:
-      'This assessment is based on heuristic fraud pattern recognition. For deep Gemini AI analysis, ensure GEMINI_API_KEY is configured in Vercel Project Settings > Environment Variables.',
+      'This assessment is based on heuristic fraud pattern recognition. For full AI-powered forensic depth, ensure GEMINI_API_KEY is configured in your Vercel project environment variables.',
   };
-}
-
-async function runGeminiAnalysis(payload: AnalysisRequestPayload): Promise<AnalysisResponseData> {
-  const { type = 'text', text = '', imageBase64 = '', mimeType = 'image/jpeg', language = 'en' } = payload;
-  const apiKey = process.env.GEMINI_API_KEY;
-
-  if (!apiKey) {
-    return analyzeFallbackLocal(text, type, language);
-  }
-
-  const ai = new GoogleGenAI({
-    apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'scamcheck-ai-vercel',
-      },
-    },
-  });
-
-  const systemPrompt = `You are SCAMCHECK AI, an expert cybersecurity and fraud awareness assistant.
-Your goal is to help ordinary people identify suspicious messages, SMS, emails, job offers, investment pitches, websites, or screenshots, and teach them how to recognize the red flags.
-
-CRITICAL PRODUCT PRINCIPLES:
-1. NEVER present your assessment as absolute certainty. Use nuanced, responsible phrasing:
-   - High risk: "Likely scam / strong signs of fraud"
-   - Moderate: "Suspicious — verify before taking action"
-   - Caution: "Caution advised — some warning signs detected"
-   - Low risk: "Low risk based on provided info, but independent verification is still recommended"
-2. Tone: Calm, non-judgmental, educational, supportive, free of unnecessary hacker jargon.
-3. Assess against 30 dimensions: Urgency, Fear/intimidation, Unexpected rewards, Upfront fees, OTP/password requests, Bank/Govt impersonation, Remote access (AnyDesk/TeamViewer), Unrealistic investment returns, Courier phishing, Typo-squatted domains, Fake customer support, QR code manipulation, Pressure to bypass normal processes, etc.
-4. Output MUST be valid JSON adhering to the specified schema.
-5. Provide simple_explanation suitable for elderly or non-tech users in everyday plain words.
-6. Provide hindi_summary (in Devanagari Hindi) and hinglish_summary (conversational Romanized Hindi/English).`;
-
-  let contentsPayload: any = '';
-
-  if (type === 'screenshot') {
-    const cleanBase64 = (imageBase64 || '').replace(/^data:image\/[a-zA-Z+]+;base64,/, '');
-    contentsPayload = {
-      parts: [
-        {
-          inlineData: {
-            data: cleanBase64,
-            mimeType: mimeType || 'image/jpeg',
-          },
-        },
-        {
-          text: `Analyze this uploaded screenshot carefully. Extract visible text (OCR), analyze sender headers, interface layout, suspicious links, or payment prompts.\nUser context: ${text || 'None'}\nProvide your complete analysis in the required JSON format.`,
-        },
-      ],
-    };
-  } else if (type === 'url') {
-    contentsPayload = `Inspect this suspicious link / website URL: "${text}".
-Examine domain registration structure, typosquatting (e.g. sbi-kyc.co vs onlinesbi.sbi), deceptive TLDs (.xyz, .top, .tk), subdomains imitating major brands, IP address URLs, or phishing patterns.
-Note: If unable to actively crawl live page, clearly explain: "I couldn't independently verify this website. Treat the link cautiously and verify it through the organization's official website."`;
-  } else {
-    contentsPayload = `Analyze this message / text for potential scam, phishing, or social engineering signals:\n\n"""\n${text}\n"""`;
-  }
-
-  const response = await ai.models.generateContent({
-    model: 'gemini-3.8-flash',
-    contents: contentsPayload,
-    config: {
-      systemInstruction: systemPrompt,
-      responseMimeType: 'application/json',
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          risk_score: { type: Type.INTEGER },
-          risk_level: { type: Type.STRING },
-          risk_label: { type: Type.STRING },
-          category: { type: Type.STRING },
-          category_name: { type: Type.STRING },
-          summary: { type: Type.STRING },
-          red_flags: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                title: { type: Type.STRING },
-                explanation: { type: Type.STRING },
-                severity: { type: Type.STRING },
-                quote: { type: Type.STRING },
-              },
-              required: ['title', 'explanation', 'severity'],
-            },
-          },
-          likely_goal: { type: Type.STRING },
-          recommended_actions: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING },
-          },
-          things_to_avoid: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING },
-          },
-          verification_steps: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING },
-          },
-          simple_explanation: { type: Type.STRING },
-          hindi_summary: { type: Type.STRING },
-          hinglish_summary: { type: Type.STRING },
-          limitations: { type: Type.STRING },
-        },
-        required: [
-          'risk_score',
-          'risk_level',
-          'risk_label',
-          'category',
-          'category_name',
-          'summary',
-          'red_flags',
-          'likely_goal',
-          'recommended_actions',
-          'things_to_avoid',
-          'verification_steps',
-          'simple_explanation',
-          'limitations',
-        ],
-      },
-    },
-  });
-
-  const rawJson = response.text ? response.text.trim() : '';
-  if (!rawJson) {
-    throw new Error('Empty response received from Gemini');
-  }
-
-  return JSON.parse(rawJson) as AnalysisResponseData;
-}
-
-// Helper to safely parse incoming body in all Node.js / Vercel lambda environments
-async function parseRequestBody(req: any): Promise<AnalysisRequestPayload> {
-  if (req.body) {
-    if (typeof req.body === 'string') {
-      try {
-        return JSON.parse(req.body);
-      } catch {
-        return { text: req.body };
-      }
-    }
-    if (typeof req.body === 'object' && req.body !== null) {
-      return req.body;
-    }
-  }
-
-  // If body is not pre-parsed, stream it
-  return new Promise((resolve) => {
-    let raw = '';
-    req.on('data', (chunk: any) => {
-      raw += chunk;
-    });
-    req.on('end', () => {
-      try {
-        resolve(JSON.parse(raw || '{}'));
-      } catch {
-        resolve({ text: raw });
-      }
-    });
-    req.on('error', () => {
-      resolve({});
-    });
-  });
-}
-
-export default async function handler(req: any, res: any) {
-  // CORS & Content-Type
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS, GET');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  res.setHeader('Content-Type', 'application/json');
-
-  if (req.method === 'OPTIONS') {
-    res.statusCode = 200;
-    res.end();
-    return;
-  }
-
-  if (req.method === 'GET') {
-    res.statusCode = 200;
-    res.end(
-      JSON.stringify({
-        status: 'ok',
-        service: 'SCAMCHECK AI Analyzer',
-        hasGeminiKey: Boolean(process.env.GEMINI_API_KEY),
-      })
-    );
-    return;
-  }
-
-  let payload: AnalysisRequestPayload = {};
-
-  try {
-    payload = await parseRequestBody(req);
-  } catch (parseErr) {
-    console.error('Body parse error:', parseErr);
-  }
-
-  const contentText = payload.text || '';
-  const isScreenshot = payload.type === 'screenshot';
-
-  if (!contentText.trim() && !isScreenshot) {
-    res.statusCode = 200;
-    res.end(
-      JSON.stringify(
-        analyzeFallbackLocal('Please provide a message or text to analyze.', 'text')
-      )
-    );
-    return;
-  }
-
-  try {
-    // Attempt Gemini AI evaluation
-    const result = await runGeminiAnalysis(payload);
-    res.statusCode = 200;
-    res.end(JSON.stringify(result));
-  } catch (aiErr: any) {
-    console.warn('[Vercel Serverless] Gemini call failed, engaging heuristic fallback:', aiErr?.message || aiErr);
-    // Never fail with 500 — deliver the verified heuristic assessment!
-    const fallback = analyzeFallbackLocal(contentText, payload.type || 'text', payload.language || 'en');
-    res.statusCode = 200;
-    res.end(JSON.stringify(fallback));
-  }
 }

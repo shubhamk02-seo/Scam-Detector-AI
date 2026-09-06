@@ -21,6 +21,7 @@ import {
   Lock,
 } from 'lucide-react';
 import { SAMPLE_SCAMS } from './data/samples';
+import { analyzeFallback } from './utils/analyzerFallback';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'analyze' | 'guides' | 'quiz' | 'emergency' | 'about'>('analyze');
@@ -46,17 +47,29 @@ export default function App() {
     setInteractedScenario(null);
 
     try {
-      const response = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
+      let data: ScamAnalysisResult | null = null;
 
-      if (!response.ok) {
-        throw new Error(`Analysis service error (Status ${response.status})`);
+      try {
+        const response = await fetch('/api/analyze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+
+        if (response.ok) {
+          data = await response.json();
+        } else {
+          console.warn(`[Analyzer] Backend responded with status ${response.status}. Using client-side safety engine fallback.`);
+        }
+      } catch (fetchError) {
+        console.warn('[Analyzer] Network fetch error. Engaging client-side safety engine fallback.', fetchError);
       }
 
-      const data: ScamAnalysisResult = await response.json();
+      // If backend was unreachable or returned non-200, engage client-side heuristic engine
+      if (!data) {
+        data = analyzeFallback(payload.text || '', payload.type, 'en');
+      }
+
       setAnalysisResult(data);
 
       setTimeout(() => {
@@ -64,9 +77,9 @@ export default function App() {
       }, 100);
     } catch (err: any) {
       console.error('Analysis error:', err);
-      setErrorMessage(
-        err.message || 'Unable to complete analysis. Please check your connection and try again.'
-      );
+      // Even in the worst case, compute fallback
+      const fallbackData = analyzeFallback(payload.text || '', payload.type, 'en');
+      setAnalysisResult(fallbackData);
     } finally {
       setIsLoading(false);
     }
